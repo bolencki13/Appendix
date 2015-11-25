@@ -1,0 +1,10 @@
+Package: com.bolencki13.appendix
+Name: Appendix
+Depends: mobilesubstrate
+Architecture: iphoneos-arm
+Description: 3D touch folder to launch apps
+Maintainer: Brian Olencki
+Author: Brian Olencki
+Section: Tweaks
+Version: 1.0.0-155
+Installed-Size: 104
