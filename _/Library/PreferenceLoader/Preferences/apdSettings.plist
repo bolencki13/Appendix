@@ -1,0 +1,10 @@
+{
+    entry = {
+	bundle = apdSettings;
+	cell = PSLinkCell;
+	detail = apdSettingsListController;
+	icon = appendix.jpg;
+	isController = 1;
+	label = Appendix;
+    };
+}

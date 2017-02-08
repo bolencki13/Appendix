@@ -1,7 +1,8 @@
 #import <UIKit/UIKit.h>
 
 #define NSLog(FORMAT, ...) NSLog(@"[%@]: %@",@"Appendix" , [NSString stringWithFormat:FORMAT, ##__VA_ARGS__])
-
+#define SCREEN ([UIScreen mainScreen].bounds)
+#define prefs ([[NSUserDefaults alloc] initWithSuiteName:@"com.bolencki13.appendix"])
 
 @interface UIInteractionProgress : NSObject
 @end
@@ -24,15 +25,17 @@
 @interface SBApplication : NSObject
 @property(copy, nonatomic) NSArray *dynamicShortcutItems;
 @property(copy, nonatomic) NSArray *staticShortcutItems;
+- (id)badgeNumberOrString;
 - (void)loadStaticShortcutItemsFromInfoDictionary:(id)arg1 bundle:(id)arg2;
 - (NSString*)bundleIdentifier;
 - (NSString*)displayName;
 @end;
 @interface SBIcon : NSObject
 - (void)launchFromLocation:(int)location;
-- (BOOL)isFolderIcon;// iOS 4+
+- (BOOL)isFolderIcon;
 - (NSString*)applicationBundleID;
 - (SBApplication*)application;
+- (id)badgeNumberOrString;
 @end
 @interface SBFolder : NSObject
 - (SBIcon*)iconAtIndexPath:(NSIndexPath *)indexPath;
@@ -64,6 +67,7 @@
 @interface SBApplicationShortcutMenuItemView : UIView
 @property(readonly, nonatomic) long long menuPosition; // @synthesize menuPosition=_menuPosition;
 @property(retain, nonatomic) SBSApplicationShortcutItem *shortcutItem; // @synthesize shortcutItem=_shortcutItem;
+@property(retain, nonatomic) UIImageView *iconView; // @synthesize iconView=_iconView;
 @property(nonatomic) _Bool highlighted; // @synthesize highlighted=_highlighted;
 + (id)_imageForShortcutItem:(id)arg1 application:(id)arg2 assetManagerProvider:(id)arg3 monogrammerProvider:(id)arg4 maxHeight:(double *)arg5;
 @end
@@ -75,9 +79,11 @@
 @interface SBApplicationShortcutMenuContentView : UIView <SBApplicationShortcutMenuContentViewDelegate>
 @property(assign,nonatomic) id <SBApplicationShortcutMenuContentViewDelegate> delegate;
 - (id)initWithInitialFrame:(struct CGRect)arg1 containerBounds:(struct CGRect)arg2 orientation:(long long)arg3 shortcutItems:(id)arg4 application:(id)arg5;
+- (void)updateSelectionFromPressGestureRecognizer:(id)arg1;
 - (void)_handlePress:(id)arg1;
 - (double)_rowHeight;
 - (void)_populateRowsWithShortcutItems:(id)arg1 application:(id)arg2;
+- (void)modifyView:(UIView*)view;
 @end
 @class SBApplicationShortcutMenu;
 @protocol SBApplicationShortcutMenuDelegate <NSObject>
@@ -104,6 +110,7 @@
 + (id)sharedInstance;
 - (void)_handleShortcutMenuPeek:(UILongPressGestureRecognizer*)arg1;
 - (void)applicationShortcutMenuDidPresent:(id)arg1;
+- (_Bool)_canRevealShortcutMenu;
 @end
 
 
@@ -131,6 +138,7 @@
 - (void)setIcon:(id)arg1 {
 	%orig;
 	self.shortcutMenuPeekGesture = [[UILongPressGestureRecognizer alloc] initWithTarget:[%c(SBIconController) sharedInstance] action:@selector(_handleShortcutMenuPeek:)];
+	self.shortcutMenuPeekGesture.minimumPressDuration = 2.0;
 	self.shortcutMenuPresentProgress = [[UIPreviewForceInteractionProgress alloc] initWithGestureRecognizer:self.shortcutMenuPeekGesture];
 	[self cancelLongPressTimer];
 }
@@ -142,9 +150,13 @@ static BOOL onScreen;
 
 %hook SBIconController
 - (void)_handleShortcutMenuPeek:(UILongPressGestureRecognizer*)arg1 {
+
 	if ([arg1.view class] == [%c(SBFolderIconView) class]) {
 			switch (arg1.state) {
 					case UIGestureRecognizerStateBegan: {
+
+						if ([((SBFolderIconView*)arg1.view) isGrabbed]) return;
+
 						currentFolderView = (SBFolderIconView*)arg1.view;
 
 						self.presentedShortcutMenu = [[%c(SBApplicationShortcutMenu) alloc] initWithFrame:[UIScreen mainScreen].bounds application:nil iconView:arg1.view interactionProgress:nil orientation:1];
@@ -157,11 +169,12 @@ static BOOL onScreen;
 					}break;
 
 					case UIGestureRecognizerStateChanged: {
+						if (!self.presentedShortcutMenu) return;
 						[self.presentedShortcutMenu updateFromPressGestureRecognizer:arg1];
 					}break;
 
 					case UIGestureRecognizerStateEnded: {
-
+						if (!self.presentedShortcutMenu) return;
 						SBApplicationShortcutMenuContentView *contentView = MSHookIvar<id>(self.presentedShortcutMenu,"_contentView");
 						NSMutableArray *itemViews = MSHookIvar<NSMutableArray *>(contentView,"_itemViews");
 						for(SBApplicationShortcutMenuItemView *item in itemViews) {
@@ -183,6 +196,33 @@ static BOOL onScreen;
 
 static SBApplication *previousApp = nil;
 %hook SBApplicationShortcutMenu
++ (void)initialize {
+	static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class myClass = [self class];
+
+        SEL originalSelector = @selector(_shortcutItemsToDisplay);
+        SEL swizzledSelector = @selector(my___shortcutItemsToDisplay);
+
+        Method originalMethod = class_getInstanceMethod(myClass, originalSelector);
+        Method swizzledMethod = class_getInstanceMethod(myClass, swizzledSelector);
+
+        BOOL didAddMethod = class_addMethod(myClass,
+                                            originalSelector,
+                                            method_getImplementation(swizzledMethod),
+                                            method_getTypeEncoding(swizzledMethod));
+
+        if (didAddMethod) {
+            class_replaceMethod(myClass,
+                                swizzledSelector,
+                                method_getImplementation(originalMethod),
+                                method_getTypeEncoding(originalMethod));
+        } else {
+            method_exchangeImplementations(originalMethod, swizzledMethod);
+        }
+				HBLogDebug(@"Swizzling '-(id)_shortcutItemsToDisplay;'");
+    });
+}
 - (id)initWithFrame:(struct CGRect)arg1 application:(id)arg2 iconView:(id)arg3 interactionProgress:(id)arg4 orientation:(long long)arg5 {
 	onScreen = NO;
 	return %orig;
@@ -204,22 +244,24 @@ static SBApplication *previousApp = nil;
 	if (self.application == nil) {
 		NSMutableArray *aryItems = [NSMutableArray new];
 
-		for (int x = 0; x < 4; x++) {
+		NSInteger shortcutItemCount = [prefs integerForKey:@"shortcutCount"];
+		if (shortcutItemCount <= 0 || shortcutItemCount > 9) {
+				shortcutItemCount = 4;
+		}
+		for (int x = 0; x < shortcutItemCount; x++) {
 			NSIndexPath *indexPath = [NSIndexPath indexPathForRow:x inSection:0];
 			NSString *folderName = @"Jailbreak";
 			NSString *bundleID = [currentFolderView.folderIcon.folder iconAtIndexPath:indexPath].application.bundleIdentifier;
-			if (bundleID == nil || [bundleID isEqualToString:@""]) {
-				break;
-		}
+			if (bundleID != nil && ![bundleID isEqualToString:@""]) {
+				UIImage *icon1 = [UIImage _applicationIconImageForBundleIdentifier:bundleID format:0 scale:[UIScreen mainScreen].scale];
+				SBSApplicationShortcutItem *action = [[%c(SBSApplicationShortcutItem) alloc] init];
+				[action setIcon:[[%c(SBSApplicationShortcutCustomImageIcon) alloc] initWithImagePNGData:UIImagePNGRepresentation(icon1)]];
+				NSString *appName = [currentFolderView.folderIcon.folder iconAtIndexPath:indexPath].application.displayName;
+				[action setLocalizedTitle:appName];
+				[action setType:[NSString stringWithFormat:@"%@_=_%@",folderName,bundleID]];
 
-		UIImage *icon1 = [UIImage _applicationIconImageForBundleIdentifier:bundleID format:0 scale:[UIScreen mainScreen].scale];
-		SBSApplicationShortcutItem *action = [[%c(SBSApplicationShortcutItem) alloc] init];
-		[action setIcon:[[%c(SBSApplicationShortcutCustomImageIcon) alloc] initWithImagePNGData:UIImagePNGRepresentation(icon1)]];
-		NSString *appName = [currentFolderView.folderIcon.folder iconAtIndexPath:indexPath].application.displayName;
-		[action setLocalizedTitle:appName];
-		[action setType:[NSString stringWithFormat:@"%@_=_%@",folderName,bundleID]];
-
-		[aryItems addObject:action];
+				[aryItems addObject:action];
+			}
 	}
 
 		return aryItems;
@@ -227,7 +269,37 @@ static SBApplication *previousApp = nil;
 		return %orig;
 	}
 }
-- (void)updateFromPressGestureRecognizer:(id)arg1 {
+%new
+- (id)my___shortcutItemsToDisplay {
+	if (self.application == nil) {
+		NSMutableArray *aryItems = [NSMutableArray new];
+
+		NSInteger shortcutItemCount = [prefs integerForKey:@"shortcutCount"];
+		if (shortcutItemCount <= 0 || shortcutItemCount > 9) {
+				shortcutItemCount = 4;
+		}
+		for (int x = 0; x < shortcutItemCount; x++) {
+			NSIndexPath *indexPath = [NSIndexPath indexPathForRow:x inSection:0];
+			NSString *folderName = @"Jailbreak";
+			NSString *bundleID = [currentFolderView.folderIcon.folder iconAtIndexPath:indexPath].application.bundleIdentifier;
+			if (bundleID != nil && ![bundleID isEqualToString:@""]) {
+				UIImage *icon1 = [UIImage _applicationIconImageForBundleIdentifier:bundleID format:0 scale:[UIScreen mainScreen].scale];
+				SBSApplicationShortcutItem *action = [[%c(SBSApplicationShortcutItem) alloc] init];
+				[action setIcon:[[%c(SBSApplicationShortcutCustomImageIcon) alloc] initWithImagePNGData:UIImagePNGRepresentation(icon1)]];
+				NSString *appName = [currentFolderView.folderIcon.folder iconAtIndexPath:indexPath].application.displayName;
+				[action setLocalizedTitle:appName];
+				[action setType:[NSString stringWithFormat:@"%@_=_%@",folderName,bundleID]];
+
+				[aryItems addObject:action];
+			}
+	}
+
+		return aryItems;
+	} else {
+		return [self my___shortcutItemsToDisplay];
+	}
+}
+- (void)updateFromPressGestureRecognizer:(UIGestureRecognizer*)arg1 {
 	%orig;
 
 	if (self.application == nil) {
@@ -241,7 +313,8 @@ static SBApplication *previousApp = nil;
 			if (origin+testWidth+5 > [UIScreen mainScreen].bounds.size.width) {
 				origin = maxMenuFrame.origin.x - maxMenuFrame.size.width -5;
 			}
-			CGRect viewFrame = maxMenuFrame;
+      return;
+      CGRect viewFrame = maxMenuFrame;
 			viewFrame.origin.x = origin;
 			viewFrame.size.height = 0;
 			appShortcutView = [[%c(SBApplicationShortcutMenuContentView) alloc] initWithInitialFrame:maxMenuFrame containerBounds:viewFrame orientation:[[UIDevice currentDevice] orientation] shortcutItems:[[%c(SBApplicationShortcutStoreManager) sharedManager] shortcutItemsForBundleIdentifier:[currentFolderView.folderIcon.folder iconAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]].application.bundleIdentifier] application:[currentFolderView.folderIcon.folder iconAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]].application];
@@ -289,12 +362,59 @@ static SBApplication *previousApp = nil;
 	appShortcutView = nil;
 	%orig;
 }
-
+- (void)layoutSubviews {
+  %orig;
+  if (onScreen == NO && [[self _shortcutItemsToDisplay] count] > 4 && self.application == nil && [prefs boolForKey:@"hideIcon"] == YES) {
+    UIView *icon = MSHookIvar<id>(self,"_proxyIconViewWrapper");
+    icon.hidden = YES;
+  }
+}
 %end
 
 %hook SBApplicationShortcutMenuContentView
 - (void)_populateRowsWithShortcutItems:(id)arg1 application:(id)arg2 {
-	%log;
 	%orig;
+/*
+
+if ([view isKindOfClass:NSClassFromString(@"SBApplicationShortcutMenuItemView")]) {
+	NSString *bundleID = [((SBApplicationShortcutMenuItemView*)view).shortcutItem.type stringByReplacingOccurrencesOfString:@"Jailbreak_=_" withString:@""];;
+	HBLogDebug(@"%@",bundleID);
+} else {
+	HBLogDebug(@"%@",NSStringFromClass([view class]));
+}
+
+*/
+	[self modifyView:self];
+}
+%new
+- (void)modifyView:(UIView*)view {
+	NSArray *subviews = [view subviews];
+
+    if ([subviews count] == 0) return;
+
+    for (UIView *subview in subviews) {
+				if ([subview isKindOfClass:NSClassFromString(@"SBApplicationShortcutMenuItemView")]) {
+					NSString *bundleID = [((SBApplicationShortcutMenuItemView*)subview).shortcutItem.type stringByReplacingOccurrencesOfString:@"Jailbreak_=_" withString:@""];
+
+					SBApplication *app = [[NSClassFromString(@"SBApplicationController") sharedInstance] applicationWithBundleIdentifier:bundleID];
+					// if ([app badgeNumberOrString] == nil) return;
+					NSString *badgeText = [NSString stringWithFormat:@"%@",[app badgeNumberOrString]];
+
+					HBLogDebug(@"%@ has badge of %@",bundleID,badgeText);
+					if (badgeText != nil && badgeText != NULL && ![badgeText isEqualToString:@""] && ![badgeText isEqualToString:@"(null)"]) {
+						UILabel *badge = [[UILabel alloc] initWithFrame:CGRectMake(CGRectGetWidth(subview.frame)+12, -10, 20, 20)];
+						badge.textColor = [UIColor whiteColor];
+						badge.layer.cornerRadius = CGRectGetHeight(badge.frame)/2;
+						badge.layer.masksToBounds = YES;
+						badge.textAlignment = NSTextAlignmentCenter;
+						badge.backgroundColor = [UIColor redColor];
+						badge.text = badgeText;
+						[((SBApplicationShortcutMenuItemView*)subview).iconView addSubview:badge];
+					}
+					// HBLogDebug(@"%@",bundleID);
+				} else {
+					[self modifyView:subview];
+				}
+    }
 }
 %end
